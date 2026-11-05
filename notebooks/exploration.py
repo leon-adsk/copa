@@ -14,15 +14,36 @@ def _():
     from pathlib import Path
     from matplotlib import pyplot as plt
 
-    return Path, pd
+    csv_path = Path("./data/csv")
+    return Path, csv_path, pd, sns
 
 
 @app.cell
-def _(Path, pd):
-    for file in Path("./data/txt/").iterdir():
-        df = pd.read_csv(f"./data/txt/{file.name}", delimiter=";", header=None)
-        df = df.rename(columns={0: "data", 1: "time", 2: "var", 3: "value", 4: "4"})
-        df.to_csv(f"./data/csv/{file.name[:len(file.name)-4]}.csv")
+def _(Path, csv_path, pd):
+    def convert_to_csv():
+        for file in Path("./data/txt/").iterdir():
+            df = pd.read_csv(f"./data/txt/{file.name}", delimiter=";", header=None)
+            df = df.rename(columns={0: "date", 1: "time", 2: "var", 3: "value", 4: "4"})
+            df.to_csv(csv_path / f"{file.name[:len(file.name)-4]}.csv", index=False)
+
+    convert_to_csv()
+    return
+
+
+@app.cell
+def _(csv_path, pd):
+    df = pd.read_csv(csv_path / "FP261104141238_FP.csv")
+    df
+    return (df,)
+
+
+@app.cell
+def _(df, pd, sns):
+    df['datetime'] = pd.to_datetime(df['date'] + ' ' + df['time'])
+    g = sns.FacetGrid(df, col="var", col_wrap=4, sharey=False, aspect=1.6)
+    g.map_dataframe(sns.lineplot, x="datetime", y="value")
+    g.tick_params(axis="x", labelrotation=45)
+    g.set_titles("{col_name}")
     return
 
 
