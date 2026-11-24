@@ -66,7 +66,7 @@ def _(Path, load_dataset):
         for file in csv_path.iterdir():
             if file.name[0] == '.':
                 continue
-    
+
             print("FILE: " + file.name)
 
             df = load_dataset(file)
@@ -166,7 +166,7 @@ def _(csv_path, load_dataset, mo):
 
 @app.cell
 def _(csv_path, load_dataset, mo, np, pd, re):
-    # Create master csv file containing archive and run information for all runs
+    # Create master.csv
     _csv_files = sorted(f for f in csv_path.glob("*.csv") if f.name != "master.csv")
 
     _fp_dfs = [load_dataset(f) for f in _csv_files if f.stem.endswith("_FP")]
@@ -177,10 +177,21 @@ def _(csv_path, load_dataset, mo, np, pd, re):
     _parts = []
     for _file in _csv_files:
         _df = load_dataset(_file)
-        _df["archive"] = _file.stem.split("_")[-1]
+        _archive = _file.stem.split("_")[-1]
+        _df["archive"] = _archive
         _df["machine"] = _df["machine"].apply(
             lambda m: f"M{int(re.search(r'\d+', str(m)).group()):02d}"
         )
+
+        if _archive == "07":
+            _df["sample_mode"] = "on_change"
+            _df["sample_interval_s"] = np.nan
+        else:
+            _df["sample_mode"] = "cyclic"
+            _sorted = _df.sort_values(["var", "datetime"])
+            _median_dt = _sorted.groupby("var")["datetime"].diff().dt.total_seconds().median()
+            _df["sample_interval_s"] = round(float(_median_dt), 1)
+
         _parts.append(_df)
 
     master_df = pd.concat(_parts, ignore_index=True)
@@ -190,16 +201,29 @@ def _(csv_path, load_dataset, mo, np, pd, re):
     _run_starts = np.unique(np.concatenate([_min_dt, _resets]))
     master_df["run_id"] = np.searchsorted(_run_starts, _dt_vals, side="right") - 1
 
-    _cols = ["datetime", "machine", "archive", "run_id", "var", "value", "status"]
+    _cols = [
+        "datetime",
+        "machine",
+        "archive",
+        "sample_mode",
+        "sample_interval_s",
+        "run_id",
+        "var",
+        "value",
+        "status",
+    ]
     master_df = master_df[_cols].sort_values(["datetime", "archive", "var"], ignore_index=True)
+    master_df["dt_since_prev_s"] = (
+        master_df.groupby("var")["datetime"].diff().dt.total_seconds()
+    )
 
     master_path = csv_path.parent / "master.csv"
     master_df.to_csv(master_path, index=False)
 
     mo.md(
         f"Saved `{master_path}` — **{len(master_df):,}** rows across "
-        f"**{master_df['run_id'].nunique()}** runs and archives "
-        f"`{sorted(master_df['archive'].unique())}`."
+        f"**{master_df['run_id'].nunique()}** runs. "
+        f"Cyclic intervals detected: `{sorted(master_df['sample_interval_s'].dropna().unique().tolist())}` s."
     )
     return (master_df,)
 
