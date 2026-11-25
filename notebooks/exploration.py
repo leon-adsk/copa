@@ -19,7 +19,7 @@ def _():
     import plotly.graph_objects as go
 
     csv_path = Path("./data/csv")
-    return Path, csv_path, mo, pd, plt, px, re, sns
+    return Path, csv_path, mo, np, pd, plt, px, re, sns
 
 
 @app.cell
@@ -27,13 +27,11 @@ def _(Path, csv_path, pd, re):
     def convert_to_csv():
         for file in Path("./data/txt/").iterdir():
             df = pd.read_csv(f"./data/txt/{file.name}", delimiter=";", header=None)
-            df = df.rename(columns={0: "date", 1: "time", 2: "var", 3: "value", 4: "4"})
-            df['datetime'] = pd.to_datetime(df['date'] + ' ' + df['time'])
-            df["machine"] = df["var"].apply(lambda x: re.findall("M[0-9]", x)[0])
-            # df["var"] = df["var"].apply(lambda x: x.split(re.findall("M[0-9]", x)[0])[-1])
+            df = df.rename(columns={0: "date", 1: "time", 2: "var", 3: "value", 4: "status"})
+            df['datetime'] = pd.to_datetime(df['date'] + ' ' + df['time'], format="%d.%m.%Y %H:%M:%S.%f")
+            df["machine"] = df["var"].apply(lambda x: re.findall("M[0-9]*", x)[0])
             df.to_csv(csv_path / f"{file.name[:len(file.name)-4]}.csv", index=False)
 
-    convert_to_csv()
     return
 
 
@@ -62,14 +60,248 @@ def _(Path, csv_path, load_dataset, sns):
 
 
 @app.cell
-def _(csv_path, visualize_data):
-    visualize_data(csv_path / "17261104141251_17.csv")
+def _(Path, load_dataset):
+    def summarize_datasets():
+        csv_path = Path("./data/csv/")
+        for file in csv_path.iterdir():
+            if file.name[0] == '.':
+                continue
+
+            print("FILE: " + file.name)
+
+            df = load_dataset(file)
+            time_between_records = df["datetime"].diff().mean()
+
+            print(f"Entries: {len(df)}")
+            print(f"Machines: {", ".join(df["machine"].unique())}")
+            print(f"Mean TbR: {time_between_records}")
+            print(f"Vars: {", ".join(df["var"].unique())}")
+            print("-----------------------")
+
+    summarize_datasets()
     return
 
 
 @app.cell
-def _(csv_path, visualize_data):
-    visualize_data(csv_path / "07261104141229_07.csv")
+def _(csv_path, load_dataset, mo, pd):
+    def inspect_runs(gap_threshold_sec: int = 60):
+        rows = []
+        run_segments = []
+
+        for file in sorted(csv_path.glob("*.csv")):
+            df = load_dataset(file).sort_values("datetime")
+            archive = file.stem.split("_")[-1]
+            diffs = df["datetime"].diff().dt.total_seconds()
+
+            gap_mask = diffs > gap_threshold_sec
+            run_ids = gap_mask.cumsum()
+
+            rows.append({
+                "file": file.name,
+                "archive": archive,
+                "start": df["datetime"].min(),
+                "end": df["datetime"].max(),
+                "max_gap_s": round(diffs.max(), 2),
+                "detected_runs": int(run_ids.nunique()),
+            })
+
+            for run_id, grp in df.groupby(run_ids):
+                run_segments.append({
+                    "file": file.name,
+                    "archive": archive,
+                    "run_id": int(run_id),
+                    "start": grp["datetime"].min(),
+                    "end": grp["datetime"].max(),
+                    "rows": len(grp),
+                })
+
+        return pd.DataFrame(rows), pd.DataFrame(run_segments)
+
+    summary_df, runs_df = inspect_runs(gap_threshold_sec=60)
+    mo.vstack([
+        mo.md("### File Coverage Summary"),
+        summary_df,
+        mo.md("### Detected Run Segments"),
+        runs_df,
+    ])
+    return (runs_df,)
+
+
+@app.cell
+def _(px, runs_df):
+    fig_runs = px.timeline(
+        runs_df,
+        x_start="start",
+        x_end="end",
+        y="file",
+        color="archive",
+        hover_data=["run_id", "rows"],
+        title="Detected Runs Across Archive Files",
+    )
+    fig_runs.update_yaxes(autorange="reversed")
+    fig_runs
+    return
+
+
+@app.cell
+def _(csv_path, load_dataset, mo):
+    _df = load_dataset(csv_path / "FP261104141238_FP.csv").sort_values("datetime")
+
+    # Check counter resets
+    _cnt = _df[_df["var"] == "Sim/Global/M7.Admin.ProductData_ProcessedCount"].copy()
+    _resets = _cnt[_cnt["value"].diff() < 0][["datetime", "value"]]
+
+    # Check unique states and how often they change
+    _st = _df[_df["var"] == "Sim/Global/M7.Status.StateCurrent"].copy()
+    _state_changes = _st[_st["value"] != _st["value"].shift(1)][["datetime", "value"]]
+
+    mo.vstack([
+        mo.md(f"**Counter resets found:** {len(_resets)}"),
+        _resets.head(20),
+        mo.md(f"**Unique states:** {sorted(_st['value'].unique())} | **Transitions:** {len(_state_changes)}"),
+        _state_changes.head(20),
+    ])
+    return
+
+
+@app.cell
+def _(csv_path, load_dataset, mo, np, pd, re):
+    # Create master.csv
+    _csv_files = sorted(f for f in csv_path.glob("*.csv") if f.name != "master.csv")
+
+    _fp_dfs = [load_dataset(f) for f in _csv_files if f.stem.endswith("_FP")]
+    _fp_all = pd.concat(_fp_dfs, ignore_index=True).sort_values("datetime")
+    _cnt = _fp_all[_fp_all["var"] == "Sim/Global/M7.Admin.ProductData_ProcessedCount"]
+    _resets = _cnt[_cnt["value"] < _cnt["value"].shift(1)]["datetime"].to_numpy(dtype="datetime64[us]")
+
+    _parts = []
+    for _file in _csv_files:
+        _df = load_dataset(_file)
+        _archive = _file.stem.split("_")[-1]
+        _df["archive"] = _archive
+        _df["machine"] = _df["machine"].apply(
+            lambda m: f"M{int(re.search(r'\d+', str(m)).group()):02d}"
+        )
+
+        if _archive == "07":
+            _df["sample_mode"] = "on_change"
+            _df["sample_interval_s"] = np.nan
+        else:
+            _df["sample_mode"] = "cyclic"
+            _sorted = _df.sort_values(["var", "datetime"])
+            _median_dt = _sorted.groupby("var")["datetime"].diff().dt.total_seconds().median()
+            _df["sample_interval_s"] = round(float(_median_dt), 1)
+
+        _parts.append(_df)
+
+    master_df = pd.concat(_parts, ignore_index=True)
+
+    _dt_vals = master_df["datetime"].to_numpy(dtype="datetime64[us]")
+    _min_dt = np.array([_dt_vals.min()], dtype="datetime64[us]")
+    _run_starts = np.unique(np.concatenate([_min_dt, _resets]))
+    master_df["run_id"] = np.searchsorted(_run_starts, _dt_vals, side="right") - 1
+
+    _cols = [
+        "datetime",
+        "machine",
+        "archive",
+        "sample_mode",
+        "sample_interval_s",
+        "run_id",
+        "var",
+        "value",
+        "status",
+    ]
+    master_df = master_df[_cols].sort_values(["datetime", "archive", "var"], ignore_index=True)
+    master_df["dt_since_prev_s"] = (
+        master_df.groupby("var")["datetime"].diff().dt.total_seconds()
+    )
+
+    master_path = csv_path.parent / "master.csv"
+    master_df.to_csv(master_path, index=False)
+
+    mo.md(
+        f"Saved `{master_path}` — **{len(master_df):,}** rows across "
+        f"**{master_df['run_id'].nunique()}** runs. "
+        f"Cyclic intervals detected: `{sorted(master_df['sample_interval_s'].dropna().unique().tolist())}` s."
+    )
+    return (master_df,)
+
+
+@app.cell
+def _(pd):
+    pd.read_csv("./data/master.csv").head()
+    return
+
+
+@app.cell
+def _(master_df, mo, px):
+    _run_bounds = master_df.groupby("run_id").agg(
+        start=("datetime", "min"),
+        end=("datetime", "max"),
+        archives=("archive", lambda s: ", ".join(sorted(s.unique()))),
+        total_rows=("value", "size"),
+    )
+    _run_bounds["duration_min"] = (
+        (_run_bounds["end"] - _run_bounds["start"]).dt.total_seconds() / 60
+    ).round(1)
+
+    _fp = master_df[master_df["archive"] == "FP"]
+    _cnt_max = (
+        _fp[_fp["var"] == "Sim/Global/M7.Admin.ProductData_ProcessedCount"]
+        .groupby("run_id")["value"]
+        .max()
+        .rename("processed_pkgs")
+    )
+    _def_max = (
+        _fp[_fp["var"] == "Sim/Global/M7.Admin.ProductData_DefectiveCount"]
+        .groupby("run_id")["value"]
+        .max()
+        .rename("defective_pkgs")
+    )
+    _spd_mean = (
+        _fp[(_fp["var"] == "Sim/Global/M7.Status.CurMachSpeed") & (_fp["value"] > 0)]
+        .groupby("run_id")["value"]
+        .mean()
+        .round(1)
+        .rename("avg_active_speed")
+    )
+    _pwr_mean = (
+        _fp[_fp["var"] == "Sim/Global/M7_Power"]
+        .groupby("run_id")["value"]
+        .mean()
+        .round(2)
+        .rename("avg_power")
+    )
+
+    runs_summary = _run_bounds.join([_cnt_max, _def_max, _spd_mean, _pwr_mean]).reset_index()
+
+    _fig = px.bar(
+        runs_summary,
+        x="run_id",
+        y="processed_pkgs",
+        color="duration_min",
+        hover_data=["start", "end", "duration_min", "defective_pkgs", "avg_active_speed", "archives"],
+        title="Processed Packages & Duration per Run",
+        labels={
+            "run_id": "Run ID",
+            "processed_pkgs": "Processed Packages",
+            "duration_min": "Duration (min)",
+        },
+    )
+
+    mo.vstack([
+        _fig,
+        runs_summary,
+    ])
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    # Charts and Such
+    """)
     return
 
 
@@ -90,7 +322,7 @@ def _(pd, plt):
             view_start = df_mach['datetime'].min()
         if view_end is None:
             view_end = df_mach['datetime'].max()
-    
+
         view_start = pd.to_datetime(view_start)
         view_end = pd.to_datetime(view_end)
 
@@ -112,14 +344,14 @@ def _(pd, plt):
             fig, ax = plt.subplots(figsize=(12, 6))
             ax.text(0.5, 0.5, "No data in this window", ha='center')
             return fig
-    
+
         blocks['start'] = blocks['start'].clip(lower=view_start)
         blocks['end'] = blocks['end'].clip(upper=view_end)
         blocks['duration_td'] = blocks['end'] - blocks['start']
 
         if len(blocks) > max_blocks:
             blocks = blocks.nlargest(max_blocks, 'duration_td').sort_values(by='start')
-    
+
         # 4. Rendering
         fig, ax = plt.subplots(figsize=(12, 6))
 
@@ -140,10 +372,10 @@ def _(pd, plt):
                 xranges = list(zip(state_data['start_num'], state_data['duration']))
                 # Draw all blocks for this state on the same Y-level
                 ax.broken_barh(xranges, (i*10 + 2, 6), facecolors=color_map[state])
-    
+
             y_ticks.append(i*10 + 5)
             y_labels.append(state)
-    
+
         ax.set_yticks(y_ticks)
         ax.set_yticklabels(y_labels)
 
@@ -169,7 +401,7 @@ def _(pd, px):
             view_start = df_mach['datetime'].min()
         if view_end is None:
             view_end = df_mach['datetime'].max()
-    
+
         view_start = pd.to_datetime(view_start)
         view_end = pd.to_datetime(view_end)
 
@@ -186,14 +418,14 @@ def _(pd, px):
 
         if blocks.empty:
             return px.timeline(title="No data in this window")
-    
+
         blocks['start'] = blocks['start'].clip(lower=view_start)
         blocks['end'] = blocks['end'].clip(upper=view_end)
         blocks['duration_td'] = blocks['end'] - blocks['start']
 
         if len(blocks) > max_blocks:
             blocks = blocks.nlargest(max_blocks, 'duration_td').sort_values(by='start')
-    
+
         fig = px.timeline(
             blocks,
             x_start="start",
