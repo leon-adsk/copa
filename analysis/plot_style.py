@@ -15,10 +15,10 @@ from matplotlib import font_manager  # noqa: E402
 # Ink and chrome
 INK, INK2, MUTED = "#0b0b0b", "#52514e", "#898781"
 GRID, AXIS, SURFACE = "#e1e0d9", "#c3c2b7", "#ffffff"
-# Categorical slots (fixed order, validated palette): identity of anomaly types A/B/C
+# Categorical slots (fixed order, validated palette): identity of the three process variables
 BLUE, ORANGE, AQUA, YELLOW, MAGENTA, GREEN, VIOLET, RED = (
     "#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948")
-TYPE_COLOR = {"A": BLUE, "B": ORANGE, "C": AQUA}
+VAR_COLOR = {"Sim/Global/M7_CompAir": BLUE, "Sim/Global/M7_Power": ORANGE, "Sim/Global/M7_FillWeight": AQUA}
 # Status colours (reserved for meaning, always with a text label)
 GOOD, WARNING, CRITICAL = "#0ca30c", "#fab219", "#d03b3b"
 NORMAL = "#b9b8b0"   # neutral grey for "normal" data behind flagged points

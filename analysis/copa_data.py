@@ -1,5 +1,5 @@
 """
-copa_data.py - load the COPA-DATA zenon exports of filler M7 into analysis-ready tables.
+copa_data.py - load the COPA-DATA zenon exports of filler M7. All columns keep their real zenon names.
 
 Data source (nothing else is ever substituted):
     data/txt/*.TXT   raw zenon archive exports delivered by COPA-DATA (Git LFS).
@@ -8,12 +8,13 @@ Data source (nothing else is ever substituted):
 Facts this module relies on, with their source:
     * Columns: Date; Time; Variable name; value; Status            -> Andreas Gruen, mail 13.11.2026
     * Ignore every row whose status contains INVALID               -> Andreas Gruen, mail 13.11.2026
-    * Export 1: two cyclic archives (3 s) + one on-change archive  -> Andreas Gruen, mail 13.11.2026
-    * Export 2: same archives, cyclic sampling time 10 s           -> Andreas Gruen, mail 20.11.2026
-    * "plenty anomalies ... between October 29 and November 4th ~10:50; after that,
-       so Nov 4 ~10:50 - 15:00, no anomalies occurred anymore"     -> Andreas Gruen, mail 13.11.2026
-      This label covers export 1 only. Export 2 starts 04.11.2026 15:00 and has no label.
-    * Sim/Global/M7.Status.StateCurrent uses PackML state numbers  -> Leon, notebooks/master_wide_construction.py
+    * Export of 04.11.2026: two cyclic archives (3 s) + one archive recording on change -> mail 13.11.2026
+    * Export of 20.11.2026: same archives, cyclic sampling time 10 s                    -> mail 20.11.2026
+    * "plenty anomalies ... between October 29 and November 4th ~10:50; after that, so Nov 4 ~10:50 - 15:00,
+       no anomalies occurred anymore"                              -> Andreas Gruen, mail 13.11.2026
+      This statement covers the export of 04.11.2026 (it ends 04.11.2026 15:00). The export of 20.11.2026 starts
+      04.11.2026 15:00; Andreas made no statement about it.
+    * Variable meanings: README.md "Variable Descriptions" (copied from Andreas' mail)
 """
 from __future__ import annotations
 
@@ -28,44 +29,48 @@ import pandas as pd
 REPO = Path(__file__).resolve().parents[1]
 TXT_DIR = REPO / "data" / "txt"
 
+# ----------------------------------------------------------------------------- real variable names
+M7_FillWeight = "Sim/Global/M7_FillWeight"
+M7_CompAir = "Sim/Global/M7_CompAir"
+M7_Power = "Sim/Global/M7_Power"
+CurMachSpeed = "Sim/Global/M7.Status.CurMachSpeed"
+MachSpeed = "Sim/Global/M7.Status.MachSpeed"
+StateCurrent = "Sim/Global/M7.Status.StateCurrent"
+ProcessedCount = "Sim/Global/M7.Admin.ProductData_ProcessedCount"
+DefectiveCount = "Sim/Global/M7.Admin.ProductData_DefectiveCount"
+WS_Cur_State = "M07.WS_Cur_State"
+WS_Cur_Prog = "M07.WS_Cur_Prog"
+WS_Cur_Mode = "M07.WS_Cur_Mode"
+
+# ----------------------------------------------------------------------------- exports (file names from COPA-DATA)
 EXPORTS = {
-    "old_3s": {
-        "label": "Export 1 (cyclic 3 s)",
+    "export_2026-11-04": {
+        "label": "Export 04.11.2026 (cyclic 3 s)",
         "files": {"FP": "FP261104141238_FP.TXT", "17": "17261104141251_17.TXT", "07": "07261104141229_07.TXT"},
         "cyclic_s": 3,
     },
-    "new_10s": {
-        "label": "Export 2 (cyclic 10 s)",
+    "export_2026-11-20": {
+        "label": "Export 20.11.2026 (cyclic 10 s)",
         "files": {"FP": "FP261120103526_FP.TXT", "17": "17261120103538_17.TXT", "07": "07261120103434_07.TXT"},
         "cyclic_s": 10,
     },
 }
+LABELLED = "export_2026-11-04"   # the only export Andreas' anomaly statement covers
 
-# Andreas Gruen, mail 13.11.2026 (export 1 only): no anomalies from ~10:50 until the export ends at 15:00.
-CLEAN_START = pd.Timestamp("2026-11-04 10:50:00")
-CLEAN_END = pd.Timestamp("2026-11-04 15:00:00")
+CLEAN_START = pd.Timestamp("2026-11-04 10:50:00")   # Andreas: no anomalies from ~10:50 ...
+CLEAN_END = pd.Timestamp("2026-11-04 15:00:00")     # ... until the end of the export (15:00)
 
-# zenon variable name -> short column name (meanings: Andreas Gruen, mail 13.11.2026)
-TAGS = {
-    "Sim/Global/M7_FillWeight": "fill_weight",                        # fill weight of the current bottle
-    "Sim/Global/M7_CompAir": "compair",                               # current compressed-air demand
-    "Sim/Global/M7_Power": "power",                                   # current power demand
-    "Sim/Global/M7.Status.CurMachSpeed": "speed",                     # current machine speed
-    "Sim/Global/M7.Status.MachSpeed": "speed_target",                 # target / nominal speed
-    "Sim/Global/M7.Status.StateCurrent": "packml_state",              # machine state (PackML numbers)
-    "Sim/Global/M7.Status.UnitModeCurrent": "unit_mode",
-    "Sim/Global/M7.Admin.ProductData_ProcessedCount": "processed",    # bottles filled in current order
-    "Sim/Global/M7.Admin.ProductData_DefectiveCount": "defective",    # rejected bottles in current order
-    "Sim/Global/M7_CompAir_incremental": "compair_cum",
-    "Sim/Global/M7_Energy_incremental": "energy_cum",
-    "Converter/Global/M07.Power": "ws_power",                         # copy of power (other logic)
-    "M07.WS_Cur_Mach_Spd": "ws_speed",                                # copy of speed
-    "M07.WS_Good_packages": "ws_good",
-    "M07.WS_Tot_Packages": "ws_total",
-    "M07.WS_Cur_State": "ws_state",                                   # Weihenstephan state (on change)
-    "M07.WS_Cur_Prog": "ws_prog",                                     # Weihenstephan program (on change)
-    "M07.WS_Cur_Mode": "ws_mode",                                     # Weihenstephan mode (on change)
-}
+# ----------------------------------------------------------------------------- derived columns (defined from real values)
+MACHINE = "machine (from CurMachSpeed)"
+RUNNING = "running: CurMachSpeed 990 or 1089"
+STOPPED = "stopped: CurMachSpeed 0"
+ORDER_END = "order end: CurMachSpeed 1100 with MachSpeed 550"
+INVALID = "no CurMachSpeed value (INVALID row or no sample in archive FP)"
+RUN_ID = "run_id"                  # as in Leon's master.csv: +1 at every reset of ProcessedCount
+LABEL = "Andreas label"
+LBL_ANOM = "anomalies (until 04.11. ~10:50)"
+LBL_CLEAN = "no anomalies (04.11. 10:50-15:00)"
+LBL_NONE = "no statement (export 20.11.2026)"
 
 PACKML_STATES = {1: "Clearing", 2: "Stopped", 3: "Starting", 4: "Idle", 5: "Suspended", 6: "Execute",
                  7: "Stopping", 8: "Aborting", 9: "Aborted", 10: "Holding", 11: "Held", 12: "Unholding",
@@ -75,8 +80,6 @@ WS_STATES = {0: "Comm. Error", 1: "Stopped", 2: "Starting", 4: "Prepared", 8: "L
              512: "Aborting", 1024: "Equipment Failure", 2048: "External Failure", 4096: "Emergency Stop",
              8192: "Holding", 16384: "Held", 32768: "Idle", 65536: "Unholding", 131072: "Suspending",
              262144: "Unsuspending", 524288: "Resetting", 1048576: "Clearing"}
-WS_PROGS = {1: "Production", 2: "Start Up", 4: "Run Down", 8: "Cleaning", 16: "Changeover",
-            32: "Maintenance", 64: "Break"}
 
 
 class LfsPointerError(RuntimeError):
@@ -87,21 +90,20 @@ def check_real_file(path: Path) -> None:
     """Refuse to work on Git LFS pointer files (the real data would silently be missing)."""
     if not path.exists():
         raise FileNotFoundError(f"{path} not found. Run `git lfs pull` in the repo.")
-    if path.stat().st_size < 1024:
-        head = path.read_bytes()[:64]
-        if head.startswith(b"version https://git-lfs"):
-            raise LfsPointerError(f"{path.name} is a Git LFS pointer, not data. Run `git lfs pull`.")
+    if path.stat().st_size < 1024 and path.read_bytes()[:64].startswith(b"version https://git-lfs"):
+        raise LfsPointerError(f"{path.name} is a Git LFS pointer, not data. Run `git lfs pull`.")
 
 
 def read_txt(path: Path) -> pd.DataFrame:
-    """One raw zenon export -> long table [ts, var, value, status, invalid]."""
+    """One raw zenon export -> rows with Andreas' column names plus a timestamp."""
     check_real_file(path)
-    df = pd.read_csv(path, sep=";", header=None, names=["date", "time", "var", "value", "status"],
-                     dtype={"date": str, "time": str, "var": str, "value": float, "status": str})
-    df["ts"] = pd.to_datetime(df["date"] + " " + df["time"], format="%d.%m.%Y %H:%M:%S.%f")
-    df["status"] = df["status"].str.strip()
-    df["invalid"] = df["status"].str.contains("INVALID", regex=False)
-    return df[["ts", "var", "value", "status", "invalid"]]
+    df = pd.read_csv(path, sep=";", header=None, names=["Date", "Time", "Variable name", "value", "Status"],
+                     dtype={"Date": str, "Time": str, "Variable name": str, "value": float, "Status": str})
+    df["Status"] = df["Status"].str.strip()
+    df["timestamp"] = pd.to_datetime(df["Date"] + " " + df["Time"], format="%d.%m.%Y %H:%M:%S.%f")
+    df["INVALID"] = df["Status"].str.contains("INVALID", regex=False)
+    df["file"] = path.name
+    return df
 
 
 def load_raw(export: str) -> dict[str, pd.DataFrame]:
@@ -109,34 +111,26 @@ def load_raw(export: str) -> dict[str, pd.DataFrame]:
 
 
 def build_wide(raw: dict[str, pd.DataFrame], export: str) -> pd.DataFrame:
-    """Cyclic archives FP + 17 pivoted on their common time grid; on-change archive 07 joined as-of.
-
-    INVALID rows are dropped, so their timestamps keep NaN values (state 'invalid')."""
+    """One row per timestamp of the cyclic archives (FP + 17); the on-change archive (07) carried forward.
+    Columns are the real variable names. INVALID rows are dropped (their timestamps stay, values NaN)."""
     cyc = pd.concat([raw["FP"], raw["17"]], ignore_index=True)
-    grid = pd.DatetimeIndex(np.sort(cyc["ts"].unique()), name="ts")
-    valid = cyc[~cyc["invalid"]]
-    wide = (valid.pivot_table(index="ts", columns="var", values="value", aggfunc="last")
-            .reindex(grid).rename(columns=TAGS))
+    grid = pd.DatetimeIndex(np.sort(cyc["timestamp"].unique()), name="timestamp")
+    valid = cyc[~cyc["INVALID"]]
+    wide = valid.pivot_table(index="timestamp", columns="Variable name", values="value", aggfunc="last").reindex(grid)
     wide.columns.name = None
-
-    ev = raw["07"][~raw["07"]["invalid"]]
-    ev = (ev.pivot_table(index="ts", columns="var", values="value", aggfunc="last")
-          .rename(columns=TAGS).sort_index().ffill())
+    ev = raw["07"][~raw["07"]["INVALID"]]
+    ev = ev.pivot_table(index="timestamp", columns="Variable name", values="value", aggfunc="last").sort_index().ffill()
     ev.columns.name = None
-    wide = pd.merge_asof(wide.reset_index(), ev.reset_index(), on="ts", direction="backward").set_index("ts")
+    wide = pd.merge_asof(wide.reset_index(), ev.reset_index(), on="timestamp", direction="backward").set_index("timestamp")
 
-    # Operating state used for all detectors (derived from speed; see analysis/README.md):
-    #   running = speed 990 (Execute, target 1000) or 1089 (Completing, target 1100)
-    #   stopped = speed 0;  glitch = speed 1100 with target 550 (one-sample transition at order end)
-    spd, tgt = wide["speed"], wide["speed_target"]
-    wide["state"] = np.select(
-        [spd.isna(), (spd == 1100) & (tgt == 550), spd == 0, spd > 0],
-        ["invalid", "glitch", "stopped", "running"], default="other")
-    wide["order_id"] = (wide["processed"].ffill().diff() < 0).cumsum()
-    if export == "old_3s":
-        wide["period"] = np.where(wide.index >= CLEAN_START, "clean", "anomaly")
+    spd, tgt = wide[CurMachSpeed], wide[MachSpeed]
+    wide[MACHINE] = np.select([spd.isna(), (spd == 1100) & (tgt == 550), spd == 0, spd.isin([990, 1089])],
+                              [INVALID, ORDER_END, STOPPED, RUNNING], default="other CurMachSpeed value")
+    wide[RUN_ID] = (wide[ProcessedCount].ffill().diff() < 0).cumsum()
+    if export == LABELLED:
+        wide[LABEL] = np.where(wide.index >= CLEAN_START, LBL_CLEAN, LBL_ANOM)
     else:
-        wide["period"] = "unlabelled"
+        wide[LABEL] = LBL_NONE
     wide.attrs["export"] = export
     wide.attrs["step_s"] = EXPORTS[export]["cyclic_s"]
     return wide
@@ -145,6 +139,11 @@ def build_wide(raw: dict[str, pd.DataFrame], export: str) -> pd.DataFrame:
 def load_export(export: str) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
     raw = load_raw(export)
     return build_wide(raw, export), raw
+
+
+def safe_name(variable: str) -> str:
+    """Variable name usable in a file name: 'Sim/Global/M7_CompAir' -> 'Sim_Global_M7_CompAir'."""
+    return variable.replace("/", "_").replace(" ", "_")
 
 
 def atomic_write(path: Path, write_fn) -> None:
