@@ -12,7 +12,6 @@ def _():
     import seaborn as sns
     import re
 
-
     from plotly import express as px
     from pathlib import Path
     from matplotlib import pyplot as plt
@@ -106,6 +105,53 @@ def _(master_df, pd):
 
     df["status"] = df["status"].astype(str)
     df
+    return (df,)
+
+
+@app.cell
+def _(df, pd):
+    cyclic = df[df["archive"] != "07"].copy()
+    cyclic["datetime"] = cyclic["datetime"].dt.floor("2s")
+
+    wide = (
+        cyclic.pivot_table(
+            index=["run_id", "datetime"],
+            columns="var",
+            values="value",
+            aggfunc="last",
+        )
+        .groupby(level="run_id")
+        .ffill(limit=1)
+        .reset_index()
+        .sort_values("datetime")
+    )
+
+    events = (
+        df[df["archive"] == "07"]
+        .pivot_table(index="datetime", columns="var", values="value", aggfunc="last")
+        .sort_index()
+        .ffill()
+        .reset_index()
+    )
+
+    master_wide = pd.merge_asof(wide, events, on="datetime", direction="backward")
+    master_wide.columns.name = None
+    master_wide
+    return (master_wide,)
+
+
+@app.cell
+def _(master_wide):
+    master_wide.to_csv("./data/master_wide.csv", index=False)
+    return
+
+
+@app.cell
+def _(master_wide):
+    print(master_wide.columns.tolist())
+    print(master_wide.index.names, type(master_wide.columns).__name__)
+    print([repr(c) for c in master_wide.columns if 'datetime' in str(c)])
+
     return
 
 
