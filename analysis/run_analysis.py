@@ -165,34 +165,45 @@ def fig_overview_10min(w1: pd.DataFrame, w2: pd.DataFrame, path: Path) -> None:
     w = pd.concat([w1, w2])
     w = w[~w.index.duplicated(keep="first")]
     run, stp = w[MACHINE] == RUNNING, w[MACHINE] == STOPPED
-    series = [(f"{M7_CompAir}   while {CurMachSpeed} = 990 or 1089", w[M7_CompAir].where(run), 33, 31.5),
-              (f"{M7_CompAir}   while {CurMachSpeed} = 0", w[M7_CompAir].where(stp), 2.3, 2.2),
-              (f"{M7_Power}   while {CurMachSpeed} = 990 or 1089", w[M7_Power].where(run), 11.4, 10.8),
-              (f"distance of {M7_FillWeight} from 500   while {CurMachSpeed} = 990 or 1089",
-               (w[M7_FillWeight] - 500).abs().where(run), 6.1, 4.9)]
+    # title, values, rule line(s) as in RULES, range seen in 10:50-15:00
+    series = [(f"{M7_CompAir}   while {CurMachSpeed} = 990 or 1089", w[M7_CompAir].where(run), [33], "max 10:50-15:00: 31.5"),
+              (f"{M7_CompAir}   while {CurMachSpeed} = 0", w[M7_CompAir].where(stp), [2.3], "max 10:50-15:00: 2.2"),
+              (f"{M7_Power}   while {CurMachSpeed} = 990 or 1089", w[M7_Power].where(run), [11.4], "max 10:50-15:00: 10.8"),
+              (f"{M7_FillWeight}   while {CurMachSpeed} = 990 or 1089", w[M7_FillWeight].where(run), [493.6, 506.1],
+               "10:50-15:00: 495.1-504.6")]
     fig, axes = plt.subplots(len(series), 1, figsize=(13, 9.6), sharex=True)
-    for ax, (title, x, rule, clean_max) in zip(axes, series):
-        m = x.resample("10min").max()
+    for ax, (title, x, rules, clean_range) in zip(axes, series):
+        blocks = x.resample("10min")
         ax.axvspan(w1.index.min(), CLEAN_START, color=S.CRITICAL, alpha=0.06, lw=0)
         ax.axvspan(CLEAN_START, CLEAN_END, color=S.GOOD, alpha=0.25, lw=0)
-        ax.plot(m.index, m.values, color=S.NORMAL, lw=0.8)
-        hi = m > rule
-        ax.scatter(m.index[hi.to_numpy(bool)], m[hi], s=6, color=S.CRITICAL, zorder=3, linewidths=0)
-        ax.axhline(rule, color=S.INK2, lw=0.8)
-        ax.text(1.0, rule, f" > {rule:g}\n (max 10:50-15:00: {clean_max:g})", transform=ax.get_yaxis_transform(),
-                va="center", ha="left", fontsize=9, color=S.INK2)
+        highest = blocks.max()                                  # highest value in each 10-minute block
+        ax.plot(highest.index, highest.values, color=S.NORMAL, lw=0.8)
+        red = (highest > max(rules)).to_numpy(bool)
+        ax.scatter(highest.index[red], highest[red], s=6, color=S.CRITICAL, zorder=3, linewidths=0)
+        if len(rules) == 2:                                     # fill weight: too low is a rule hit as well
+            lowest = blocks.min()
+            ax.plot(lowest.index, lowest.values, color=S.NORMAL, lw=0.8)
+            red = (lowest < min(rules)).to_numpy(bool)
+            ax.scatter(lowest.index[red], lowest[red], s=6, color=S.CRITICAL, zorder=3, linewidths=0)
+        for rule in rules:
+            ax.axhline(rule, color=S.INK2, lw=0.8)
+        rule_text = f"> {rules[0]:g}" if len(rules) == 1 else f"< {rules[0]:g} or > {rules[1]:g}"
+        ax.text(1.0, rules[0] if len(rules) == 1 else 0.5, f" {rule_text}\n ({clean_range})", va="center", ha="left",
+                transform=ax.get_yaxis_transform() if len(rules) == 1 else ax.transAxes, fontsize=9, color=S.INK2)
         ax.set_title(title, fontsize=10.5, loc="left", fontweight="normal")
-        ax.set_ylabel("highest distance\nfrom 500 in 10 min" if "distance" in title else "highest value\nin 10 min", fontsize=9)
-    axes[-1].set_xlabel("date (2026)")
+        ax.set_ylabel("highest and lowest\nvalue in each 10 min" if len(rules) == 2 else "highest value\nin each 10 min",
+                      fontsize=9)
+    axes[-1].set_xlabel("date (2026); one point = one 10-minute block")
     axes[-1].xaxis.set_major_locator(mdates.DayLocator(interval=2))
     axes[-1].xaxis.set_major_formatter(mdates.DateFormatter("%d.%m"))
     fig.legend(handles=[Patch(color=S.CRITICAL, alpha=0.15, label="export 04.11.2026 until 04.11. 10:50 (Andreas: anomalies)"),
                         Patch(color=S.GOOD, alpha=0.5, label="04.11. 10:50-15:00 (Andreas: no anomalies)"),
                         Patch(facecolor="white", edgecolor=S.AXIS, label="export 20.11.2026 (no statement from Andreas)"),
-                        Line2D([], [], color=S.NORMAL, label="highest value in each 10 minutes"),
-                        Line2D([], [], marker="o", ls="", color=S.CRITICAL, label="above the threshold")],
+                        Line2D([], [], color=S.NORMAL, label="highest value in each 10 minutes (fill weight: also the lowest)"),
+                        Line2D([], [], marker="o", ls="", color=S.CRITICAL, label="beyond the rule line")],
                loc="lower center", ncol=3, bbox_to_anchor=(0.5, -0.03), fontsize=9.5)
-    fig.suptitle("Highest value per 10 minutes, all days of both exports", x=0.01, ha="left", fontsize=14, fontweight="bold")
+    fig.suptitle("Highest value per 10 minutes (a value, not a count), all days of both exports", x=0.01, ha="left",
+                 fontsize=14, fontweight="bold")
     fig.tight_layout(rect=(0, 0.06, 1, 1))
     S.save(fig, path)
 

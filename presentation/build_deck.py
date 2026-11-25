@@ -233,8 +233,8 @@ def main() -> None:
             "Median extra delay of the online version per variable, with the share of batch episodes also found online.")
     note_box(s, 0.5, 5.95, 6.75, 0.95,
              [("How we tested: ", dict(size=13, bold=True)),
-              ("export 04.11.2026 replayed row by row. Online uses only past rows (60 s window); batch uses a centred "
-               "window that also sees 30 s ahead. Same limits from 10:50–15:00.", dict(size=13))], "Method")
+              ("online = detection while the data arrives (task PDF). Export 04.11.2026 replayed row by row: online "
+               "sees only past rows (60 s window), batch a centred window (30 s ahead).", dict(size=13))], "Method")
     lo = min(r["batch episodes also found online %"] for r in rq2.values())
     hi = max(r["batch episodes also found online %"] for r in rq2.values())
     callout(s, X, 2.45, W, f"{lo:.0f}–{hi:.0f} %",

@@ -13,10 +13,21 @@ uv run python analysis/run_analysis.py --write-processed  # also two large CSVs 
 uv run --with python-pptx python presentation/build_deck.py   # rebuilds the slides from results/metrics.json
 ```
 
-Interactive walkthrough: `notebooks/anomaly_findings_colab.ipynb` (press play on each cell). It works with a local
-kernel in VS Code, with the VS Code Colab extension, or on colab.research.google.com. A Colab server cannot see local
-files, so there the first cell clones branch `jbt` with a GitHub token (Colab secret `GITHUB_TOKEN`, or typed in when
-asked; it is not saved in the notebook). If a fine-grained token cannot see Leon's repo, use a classic token with `repo` scope.
+Walkthrough and presentation: `notebooks/anomaly_findings_colab.ipynb`. It is saved with all results, so it can be
+shown without running anything. To run it, press play on the **Start** cell once; after that every step runs on its own,
+in any order (or use Run All). Step 9 (what the anomalies cause) is computed in the notebook itself from the episode
+tables in `results/tables/` and the bottle counters.
+
+* **Local kernel in VS Code** (nothing is downloaded): select the kernel "copa (local)". To create it on another
+  computer, keeping the environment out of OneDrive:
+  ```bash
+  UV_PROJECT_ENVIRONMENT=~/.venvs/copa uv sync --frozen
+  uv pip install --python ~/.venvs/copa/bin/python ipykernel nbformat
+  ~/.venvs/copa/bin/python -m ipykernel install --user --name copa-local --display-name "copa (local)"
+  ```
+* **Colab** (VS Code Colab extension or colab.research.google.com): a Colab server cannot see local files, so the
+  Start cell downloads branch `jbt` from GitHub (the repo is public, so no token; about 410 MB, again in every new
+  Colab session). It gets the last pushed state, so push before using Colab.
 
 | file | what it does |
 |---|---|
