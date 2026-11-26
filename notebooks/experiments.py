@@ -166,19 +166,20 @@ def _(df, metric_cols, mo):
 
 @app.cell
 def _(df, means, metric_cols, np, pd, std):
-    thresh_fac = 1.0
-    std_anomaly_occurences = {}
-    for _col in metric_cols:
-        _mask = np.abs(df[_col] - means[_col]) > thresh_fac * std[_col]
-        std_anomaly_occurences[_col] =  df["datetime"].loc[_mask]
-    std_anomaly_occurences = pd.DataFrame(std_anomaly_occurences)
-    std_anomaly_occurences
-    return (std_anomaly_occurences,)
+    def find_anomalies(thresh):
+        std_anomaly_occurences = {}
+        for _col in metric_cols:
+            _mask = np.abs(df[_col] - means[_col]) > thresh * std[_col]
+            std_anomaly_occurences[_col] =  df["datetime"].loc[_mask]
+        std_anomaly_occurences = pd.DataFrame(std_anomaly_occurences)
+        return std_anomaly_occurences
+
+    return (find_anomalies,)
 
 
 @app.cell
-def _(metric_cols, mo, std_anomaly_occurences):
-    _all_dates = std_anomaly_occurences[metric_cols].stack()
+def _(df, metric_cols, mo):
+    _all_dates = df["datetime"]
 
     selected_cols = mo.ui.multiselect(
         options=metric_cols,
@@ -192,12 +193,15 @@ def _(metric_cols, mo, std_anomaly_occurences):
         label="Time Range",
     )
 
-    mo.hstack([selected_cols, date_range])
-    return date_range, selected_cols
+    threshhold = mo.ui.number(value=1.0, label="thresh_fac", start=0.0, step=0.1)
+
+    mo.hstack([selected_cols, date_range, threshhold])
+    return date_range, selected_cols, threshhold
 
 
 @app.cell
-def _(date_range, pd, plt, selected_cols, sns, std_anomaly_occurences):
+def _(date_range, find_anomalies, pd, plt, selected_cols, sns, threshhold):
+    std_anomaly_occurences = find_anomalies(thresh=threshhold.value)
     _df_long = std_anomaly_occurences.melt(
         value_vars=selected_cols.value,
         var_name="source",
@@ -211,7 +215,7 @@ def _(date_range, pd, plt, selected_cols, sns, std_anomaly_occurences):
     ]
 
     plt.figure(figsize=(12, 6))
-    sns.kdeplot(
+    _ax = sns.kdeplot(
         data=_df_long,
         x="datetime",
         hue="source",
@@ -220,8 +224,21 @@ def _(date_range, pd, plt, selected_cols, sns, std_anomaly_occurences):
         alpha=0.1,
         bw_adjust=0.3,
     )
+
+    _span = _ax.axvspan(
+        pd.to_datetime("2026-11-04 10:50"),
+        pd.to_datetime("2026-11-04 15:00"),
+        color="gold",
+        alpha=0.2,
+        zorder=0,
+        label="no anoms?"
+    )
+
+    _ax.legend(handles=[*_ax.get_legend().legend_handles, _span], labels=[*(t.get_text() for t in _ax.get_legend().texts), "no anoms?"])
+
     plt.xticks(rotation=45, ha="right")
-    plt.tight_layout()
+    # plt.tight_layout()
+    plt.suptitle(f"Anomaly Density (further than {threshhold.value} std from mean)")
     plt.gca()
     return
 
